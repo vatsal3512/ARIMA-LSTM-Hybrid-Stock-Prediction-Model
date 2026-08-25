@@ -16,7 +16,10 @@ company_data = yf.download(company_ticker, start=start_date, end=end_date)
 index_data = yf.download(index_ticker, start=start_date, end=end_date)
 
 # Save company data for the hybrid model
+if isinstance(company_data.columns, pd.MultiIndex):
+    company_data.columns = company_data.columns.droplevel('Ticker')
 company_data.to_csv("AAPL_historical_data.csv")
+
 
 #Keep only the 'Close' column
 company_close = company_data[['Close']].dropna()
@@ -49,4 +52,4 @@ plt.ylabel('Price (USD)')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.show()
+# plt.show()

@@ -6,14 +6,17 @@ from dotenv import load_dotenv
 import matplotlib.pyplot as plt
 from statsmodels.graphics.tsaplots import plot_pacf,plot_acf
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-import tensorflow as tf
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
 from pmdarima import auto_arima
 from statsmodels.tsa.arima.model import ARIMA
 
 load_dotenv()
 Filename_address = os.getenv("FILE_ADDRESS")
 Output_address = os.getenv("OUTPUT_ADDRESS")
-close = "Adj_Close"
+close = "Close"
 lag = os.getenv("LAG")
 epochs = int(os.getenv("EPOCHS"))
 learning_rate = float(os.getenv("LEARNING_RATE"))
@@ -24,7 +27,7 @@ n = int(os.getenv("NN_LAGS"))
 
 # Basically loading the data and making a data-frame wrt to time.
 def data_loader():
-   cols = ["Open", "High", "Low", "Close", "Adj_Close", "Volume"]
+   cols = ["Close", "High", "Low", "Open", "Volume"]
    data = pd.read_csv(Filename_address, index_col="Date", parse_dates=True)
    data.columns = cols
    data = data.dropna()
@@ -114,35 +117,79 @@ def data_allocation(data):
    print(f"\nThe Number of Enteries : {len(test)}\n")
    return train,test
 
-# Here we are Transforming the data for the Neural Network in a lag based matrix (nth:matrix).
 def apply_transform(data, n: int):
     middle_data = []
     target_data = []
     for i in range(n, len(data)):
-        input_sequence = data[i-n:i]  
+        input_sequence = data.iloc[i-n:i]  
         middle_data.append(input_sequence) 
-        target_data.append(data[i])
+        target_data.append(data.iloc[i])
     middle_data = np.array(middle_data).reshape((len(middle_data), n, 1))
     target_data = np.array(target_data)
     return middle_data,target_data
 
+class PyTorchLSTM(nn.Module):
+   def __init__(self, number_nodes):
+      super().__init__()
+      self.lstm = nn.LSTM(input_size=1, hidden_size=number_nodes, batch_first=True)
+      self.fc1 = nn.Linear(number_nodes, number_nodes)
+      self.relu = nn.ReLU()
+      self.fc2 = nn.Linear(number_nodes, number_nodes)
+      self.fc3 = nn.Linear(number_nodes, 1)
+
+   def forward(self, x):
+      out, _ = self.lstm(x)
+      out = out[:, -1, :] 
+      out = self.relu(self.fc1(out))
+      out = self.relu(self.fc2(out))
+      out = self.fc3(out)
+      return out
+
+class ModelWrapper:
+   def __init__(self, pt_model):
+      self.model = pt_model
+      self.model.eval()
+   def predict(self, x):
+      x_t = torch.tensor(x, dtype=torch.float32)
+      with torch.no_grad():
+         return self.model(x_t).numpy()
+   def summary(self):
+      return "PyTorch LSTM Model (Summary omitted)"
+
 # This the LSTM model training Function 
 def LSTM(train,n : int, number_nodes, learning_rate, epochs, batch_size):
    middle_data, target_data = apply_transform(train, n)
-   model = tf.keras.Sequential([
-      tf.keras.layers.Input((n,1)),
-      tf.keras.layers.LSTM(number_nodes,input_shape=(n, 1)),
-      tf.keras.layers.Dense(units = number_nodes,activation = "relu"),
-      tf.keras.layers.Dense(units = number_nodes,activation = "relu"),
-      tf.keras.layers.Dense(1)
-   ])
-   model.compile(loss = 'mse',optimizer = tf.keras.optimizers.Adam(learning_rate),metrics = ["mean_absolute_error"])
+   X = torch.tensor(middle_data, dtype=torch.float32)
+   y = torch.tensor(target_data, dtype=torch.float32).view(-1, 1)
+   
+   dataset = TensorDataset(X, y)
+   loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+   
+   model = PyTorchLSTM(number_nodes)
+   criterion = nn.MSELoss()
+   optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+   
+   history = []
+   model.train()
+   for epoch in range(epochs):
+      epoch_loss = 0
+      for batch_X, batch_y in loader:
+         optimizer.zero_grad()
+         outputs = model(batch_X)
+         loss = criterion(outputs, batch_y)
+         loss.backward()
+         optimizer.step()
+         epoch_loss += loss.item()
+      history.append(epoch_loss / len(loader))
+      
    print(f"middle_data shape: {middle_data.shape}")
    print(f"target_data shape: {target_data.shape}")
-   print(f"LSTM input shape: {model.layers[0].input_shape}")
-   history = model.fit(middle_data,target_data,epochs = epochs,batch_size = batch_size,verbose = 0)
-   full_predictions = model.predict(middle_data).flatten()
-   return model,history,full_predictions
+   
+   model.eval()
+   with torch.no_grad():
+      full_predictions = model(X).numpy().flatten()
+      
+   return ModelWrapper(model), history, full_predictions
 
 # Calculating Accuracy of the Both the Models 
 def calculate_accuracy(true_values, predictions):
@@ -155,7 +202,7 @@ def calculate_accuracy(true_values, predictions):
 def Error_Evaluation(train_data,predict_train_data,n:int):
    errors = []
    for i in range(len(predict_train_data)):
-      err = train_data[n + i] - predict_train_data[i]
+      err = train_data.iloc[n + i] - predict_train_data[i]
       errors.append(err)
    return errors
 
@@ -196,8 +243,8 @@ def main():
     # LSTM Model
     st1 = time.time()
     model, history, full_predictions = LSTM(train, n, number_nodes, learning_rate, epochs, batch_size)
-    plot_predictions(train[n:], full_predictions,"LSTM PREDICTIONS VS ACTUAL Values For TRAIN Data Set")
-    last_sequence = train[-n:].values.reshape((1, n, 1))
+    plot_predictions(train.iloc[n:], full_predictions,"LSTM PREDICTIONS VS ACTUAL Values For TRAIN Data Set")
+    last_sequence = train.iloc[-n:].values.reshape((1, n, 1))
     predictions = []
     for i in range(days+1):
         next_prediction = model.predict(last_sequence).flatten()[0]
@@ -262,7 +309,7 @@ def main():
       file.write(f"The Lag Value for the Neural Network to Work : {n}\n\n")
       file.write("\n---------------------- FULL PREDICTIONS OF THE TRAIN DATA (FIRST 100 points) FROM LSTM MODEL -------------------------\n")
       for i in range(100):
-         file.write(f"{i} => ACTUAL DATA POINT : {train[i]} | PREDICTED DATA POINT : {full_predictions[i]}\n")
+         file.write(f"{i} => ACTUAL DATA POINT : {train.iloc[i]} | PREDICTED DATA POINT : {full_predictions[i]}\n")
       file.write(f"LMST Model Summary : \n{model.summary()}\n\n")
       file.write(f"LMST HISTORY OF THE MODEL : \n{history}\n\n")
       file.write(f"LMST Model Mean Squared Error : {mse}\n\n")
