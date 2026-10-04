@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.venv/
+results/
+output.txt
+Final_Results_Dashboard.jpg

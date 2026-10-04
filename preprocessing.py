@@ -1,55 +1,24 @@
-import yfinance as yf
-import pandas as pd
+"""Download the data the model needs:
+  AAPL_historical_data.csv  - AAPL daily OHLCV (adjusted), last 10 years
+  market_data.csv           - S&P 500 and VIX daily closes (meta-learner context)
+"""
 import datetime
-import matplotlib.pyplot as plt
 
-# Define tickers
-company_ticker = 'AAPL'   
-index_ticker = '^GSPC'        # S&P 500 Index
+import pandas as pd
+import yfinance as yf
 
-#Define date range (last 10 years from today)
-end_date = datetime.datetime.today()
-start_date = end_date - datetime.timedelta(days=365*10)  # Changed from 30 years to 10 years
+TICKER = "AAPL"
+END = datetime.datetime.today()
+START = END - datetime.timedelta(days=365 * 10)
 
-#Fetch historical data
-company_data = yf.download(company_ticker, start=start_date, end=end_date)
-index_data = yf.download(index_ticker, start=start_date, end=end_date)
+stock = yf.download(TICKER, start=START, end=END, auto_adjust=True, progress=False)
+if isinstance(stock.columns, pd.MultiIndex):
+    stock.columns = stock.columns.droplevel("Ticker")
+stock[["Close", "High", "Low", "Open", "Volume"]].to_csv("AAPL_historical_data.csv")
 
-# Save company data for the hybrid model
-if isinstance(company_data.columns, pd.MultiIndex):
-    company_data.columns = company_data.columns.droplevel('Ticker')
-company_data.to_csv("AAPL_historical_data.csv")
+market = yf.download(["^GSPC", "^VIX"], start=START, end=END, auto_adjust=True, progress=False)["Close"]
+market = market.rename(columns={"^GSPC": "SP500", "^VIX": "VIX"})[["SP500", "VIX"]]
+market.index.name = "Date"
+market.to_csv("market_data.csv")
 
-
-#Keep only the 'Close' column
-company_close = company_data[['Close']].dropna()
-index_close = index_data[['Close']].dropna()
-
-#Align both datasets by common dates
-data = pd.concat([company_close, index_close], axis=1, join='inner')
-data.columns = ['AAPL_Close', 'SP500_Close']
-
-#Remove COVID crash period (2020-02 to 2020-04)
-data = data[~((data.index >= '2020-02-15') & (data.index <= '2020-04-30'))] 
-
-#Split data into train and test (80-20)
-split_index = int(len(data) * 0.8)
-train_data = data[:split_index]
-test_data = data[split_index:]
-
-print(f"Total data points: {len(data)}")
-print(f"Training data points: {len(train_data)}")
-print(f"Testing data points: {len(test_data)}")
-
-#Plot closing prices
-plt.figure(figsize=(14,6))
-plt.plot(data['AAPL_Close'], label='AAPL')
-plt.plot(data['SP500_Close'], label='S&P 500')
-plt.axvline(data.index[split_index], color='red', linestyle='--', label='Train-Test Split')
-plt.title('Daily Closing Prices (AAPL vs S&P 500)')
-plt.xlabel('Date')
-plt.ylabel('Price (USD)')
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-# plt.show()
+print(f"{TICKER}: {len(stock)} rows, market: {len(market)} rows")

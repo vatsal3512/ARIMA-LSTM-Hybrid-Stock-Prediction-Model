@@ -1,0 +1,11 @@
+numpy
+pandas
+matplotlib
+scipy
+scikit-learn==1.*
+statsmodels==0.14.*
+pmdarima==2.1.*
+torch>=2.0
+python-dotenv
+yfinance
+pytest
